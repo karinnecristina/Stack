@@ -1,0 +1,21 @@
+[project]
+name = "genesis"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "kacristinaa",email = "karinnecristina@stacktecnologias.com.br,"}
+]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pyspark (==3.4.4)",
+    "boto3 (>=1.35.95,<2.0.0)",
+    "trino (>=0.331.0,<0.332.0)",
+    "dbt-trino (>=1.9.0,<2.0.0)",
+    "python-dotenv (>=1.0.1,<2.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

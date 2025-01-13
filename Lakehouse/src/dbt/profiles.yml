@@ -1,0 +1,12 @@
+dbt_project:
+  target: prod
+  outputs:
+    prod:
+      type: trino
+      threads: 4
+      host: "{{ env_var('TRINO_HOST') }}"
+      port: "{{ env_var('TRINO_PORT') }}"
+      user: "{{ env_var('TRINO_USER') }}"
+      catalog: "{{ env_var('DBT_CATALOG_GOLD') }}"
+      schema: "{{ env_var('DBT_SCHEMA_GOLD') }}"
+      connection_method: direct
