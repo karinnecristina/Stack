@@ -1,0 +1,4 @@
+pyspark==3.5.4
+delta-spark==3.3.0
+python-dotenv==1.0.1
+apache-airflow-providers-apache-spark==5.0.0
