@@ -70,8 +70,6 @@ services:
     entrypoint: [ "/bin/sh", "-c", "sleep 30 && trino --server trino-coordinator:8080 -f /docker-entrypoint-initdb.d/create_schemas.sql" ]
     volumes:
       - ./src/trino/init_trino/create_schemas.sql:/docker-entrypoint-initdb.d/create_schemas.sql
-    networks:
-      - lakehouse_network
 
   mariadb:
     container_name: mariadb
@@ -84,8 +82,6 @@ services:
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
       MYSQL_DATABASE: metastore_db
-    networks:
-      - lakehouse_network
 
   hive-metastore:
     container_name: hive-metastore
@@ -100,10 +96,7 @@ services:
       HIVE_METASTORE_DRIVER: org.mariadb.jdbc.Driver
     depends_on:
       - mariadb
-    networks:
-      - lakehouse_network
 
-  # Airflow common service
   x-airflow-common:
     &airflow-common
     image: airflow
@@ -127,6 +120,7 @@ services:
       - ${AIRFLOW_PROJ_DIR:-/home/karinne/stack/Genesis/Lakehouse/src/airflow}/dags:/opt/airflow/dags
       - ${AIRFLOW_PROJ_DIR:-/home/karinne/stack/Genesis/Lakehouse/src/airflow}/logs:/opt/airflow/logs
       - ${AIRFLOW_PROJ_DIR:-/home/karinne/stack/Genesis/Lakehouse/src/airflow}/plugins:/opt/airflow/plugins
+      - ./src/spark:/spark_job
     user: "${AIRFLOW_UID:-50000}:0"
     depends_on:
       &airflow-common-depends-on
@@ -134,8 +128,6 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-    networks:
-      - lakehouse_network
 
   postgres:
     image: postgres:13
@@ -172,9 +164,110 @@ services:
     networks:
       - lakehouse_network
 
-  # Spark services
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    container_name: airflow-webserver
+    hostname: airflow-webserver
+    ports:
+      - "8081:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    networks:
+      - lakehouse_network
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    container_name: airflow-scheduler
+    hostname: airflow-scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    networks:
+      - lakehouse_network
+
+  airflow-worker:
+    <<: *airflow-common
+    command: celery worker
+    container_name: airflow-worker
+    hostname: airflow-worker
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    environment:
+      <<: *airflow-common-env
+      DUMB_INIT_SETSID: "0"
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    networks:
+      - lakehouse_network
+
+  airflow-triggerer:
+    <<: *airflow-common
+    command: triggerer
+    container_name: airflow-triggerer
+    hostname: airflow-triggerer
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-init:
+    <<: *airflow-common
+    command: airflow db init
+    container_name: airflow-init
+    hostname: airflow-init
+    entrypoint: /bin/bash -c "airflow db init && airflow users create --username ${AIRFLOW_USER} --password ${AIRFLOW_PASSWORD} --firstname Admin --lastname User --email admin@example.com --role Admin"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: on-failure
+    depends_on:
+      <<: *airflow-common-depends-on
+      postgres:
+        condition: service_healthy
+    networks:
+      - lakehouse_network
+
+# Spark services
   spark-master:
-    image: bitnami/spark:3.5.4
+    image: bitnami/spark:3.4.3
     container_name: spark-master
     hostname: spark-master
     environment:
@@ -188,29 +281,34 @@ services:
     networks:
       - lakehouse_network
     volumes:
-      - ../mnt/spark_job:/spark_job/
+      - ./src/spark/ingestion.py:/spark_job/
     ports:
       - "9090:8080"
       - "7077:7077"
       - '18080:8080'
 
   spark-worker:
-    image: bitnami/spark:3.5.4
+    image: bitnami/spark:3.4.3
     hostname: spark-worker
     environment:
       - SPARK_MODE=worker
       - SPARK_MASTER_URL=spark://spark-master:7077
-      - SPARK_WORKER_MEMORY=2G
-      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_MEMORY=8G
+      - SPARK_WORKER_CORES=8
     networks:
       - lakehouse_network
+    volumes:
+      - ./src/spark/ingestion.py:/spark_job/
     deploy:
-      replicas: 2
+      replicas: 1
+
 
 networks:
   lakehouse_network:
     name: lakehouse_network
 
+
 volumes:
   postgres-db-volume:
   minio-data:
+  spark-job-data:
